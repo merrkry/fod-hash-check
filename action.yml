@@ -30,15 +30,14 @@ runs:
           echo "::error::installables must list at least one installable"
           exit 1
         fi
-        system=$(nix eval --impure --raw --expr builtins.currentSystem)
-        drvs=$(nix path-info --derivation --no-write-lock-file "${installables[@]}" | LC_ALL=C sort -u)
-        inputs=$(printf '%s\n' "$CHECK_VERSION" "$system" "$drvs")
-        echo "Key inputs:"
-        echo "$inputs"
-        key=$(KEY_INPUTS=$inputs nix eval --impure --raw --expr 'builtins.hashString "sha256" (builtins.getEnv "KEY_INPUTS")')
+        export DERIVATIONS=$RUNNER_TEMP/fod-hash-check-derivations.json
+        nix derivation show --no-write-lock-file "${installables[@]}" > "$DERIVATIONS"
+        result=$(nix eval --impure --raw --file "$GITHUB_ACTION_PATH/key.nix")
+        read -r key drvs <<< "$result"
         echo "Key: $key"
         echo "key=$key" >> "$GITHUB_OUTPUT"
-        echo "drvs=$(tr '\n' ' ' <<< "$drvs")" >> "$GITHUB_OUTPUT"
+        echo "Derivations: $drvs"
+        echo "drvs=$drvs" >> "$GITHUB_OUTPUT"
 
     # Only cache-hit matters, so nothing is downloaded.
     - name: Look up cached success
@@ -59,8 +58,8 @@ runs:
         read -r -a drvs <<< "$DRVS"
         set -x
         # --rebuild requires valid outputs, including on a clean store.
-        nix build --no-link "${drvs[@]/%/^*}"
-        nix build --no-link --rebuild "${drvs[@]/%/^*}"
+        nix build --no-link --keep-going "${drvs[@]}"
+        nix build --no-link --keep-going --rebuild "${drvs[@]}"
         touch .fod-hash-check-success
 
     # Saved here rather than in a post step, so a later failure in the job

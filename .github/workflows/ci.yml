@@ -83,6 +83,14 @@ jobs:
         with:
           installables: path:./test/fixture#stale
 
+      # package builds reproducibly, so only the key step can reject it.
+      - name: Check a derivation without a fixed output hash
+        id: package
+        continue-on-error: true
+        uses: ./
+        with:
+          installables: path:./test/fixture#good path:./test/fixture#package
+
       - name: Assert results
         env:
           FIRST_KEY: ${{ steps.first.outputs.key }}
@@ -93,6 +101,8 @@ jobs:
           UNCACHED_HIT: ${{ steps.uncached.outputs.cache-hit }}
           WRONG: ${{ steps.wrong.outcome }}
           STALE: ${{ steps.stale.outcome }}
+          PACKAGE: ${{ steps.package.outcome }}
+          PACKAGE_KEY: ${{ steps.package.outputs.key }}
         run: |
           status=0
           expect() {
@@ -110,6 +120,8 @@ jobs:
           expect "uncached check has the same key" "$UNCACHED_KEY" "$FIRST_KEY"
           expect "wrong hash fails" "$WRONG" failure
           expect "stale hash fails" "$STALE" failure
+          expect "derivation without a fixed output hash fails" "$PACKAGE" failure
+          expect "derivation without a fixed output hash gets no key" "$PACKAGE_KEY" ""
           expect "workspace is unchanged" "$(git status --porcelain)" ""
           [ "${#FIRST_KEY}" -eq 64 ] || { echo "::error::key is not a SHA-256: $FIRST_KEY"; status=1; }
           exit "$status"

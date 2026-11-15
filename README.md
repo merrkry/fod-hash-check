@@ -48,6 +48,8 @@ on:
 
 Installables follow the same rules as `nix build`: `.#web.pnpmDeps` resolves to `packages.<system>.web.pnpmDeps` or `legacyPackages.<system>.web.pnpmDeps`, and full attribute paths such as `.#checks.x86_64-linux.foo` also work. Lock files are not written.
 
+Each installable must be a fixed-output derivation, such as `.#web.pnpmDeps` rather than `.#web`. The action fails on any other derivation, since rebuilding it verifies no hash.
+
 ## Outputs
 
 | Output      | Description                                                                                 |
@@ -57,9 +59,9 @@ Installables follow the same rules as `nix build`: `.#web.pnpmDeps` resolves to 
 
 ## How it works
 
-1. Evaluates the derivation paths of all installables in one `nix path-info --derivation` and hashes them, together with the system and a check version, into `key`. Different spellings of the same derivations share a key. The Nix version and other tooling are not part of the key, since they do not change whether a declared hash is correct.
+1. Evaluates all installables in one `nix derivation show`, fails if any of them has no fixed output hash, and hashes their derivation paths, together with the system and a check version, into `key`. Different spellings of the same derivations share a key. The Nix version and other tooling are not part of the key, since they do not change whether a declared hash is correct.
 2. Looks up a cache entry for `key` without downloading it.
-3. On a miss, or with `use-cache: false`, builds the evaluated derivations with `nix build --no-link` to make the outputs valid, then with `nix build --no-link --rebuild` to fetch them again and compare.
+3. On a miss, or with `use-cache: false`, builds the evaluated derivations with `nix build --no-link` to make the outputs valid, then with `nix build --no-link --rebuild` to fetch them again and compare. Both builds use `--keep-going`, so one run reports every mismatch.
 4. Saves the cache entry right after the check succeeds, so a later failing step in the job does not discard the result.
 
 The marker file exists in the workspace only while it is being saved, so the action leaves the checkout unchanged.

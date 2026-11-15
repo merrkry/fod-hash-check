@@ -16,31 +16,42 @@
       packagesFor =
         system:
         let
-          # Writes `content` to $out and declares the hash of `declared`.
+          # Writes `content` to $out.
+          write =
+            name: content: extra:
+            derivation (
+              {
+                inherit
+                  name
+                  system
+                  content
+                  salt
+                  ;
+                builder = "/bin/sh";
+                args = [
+                  "-c"
+                  ''printf %s "$content" > "$out"''
+                ];
+              }
+              // extra
+            );
+
+          # Declares the hash of `declared` as its output hash.
           fod =
             {
               name,
               content,
               declared ? content,
             }:
-            derivation {
-              inherit
-                name
-                system
-                content
-                salt
-                ;
-              builder = "/bin/sh";
-              args = [
-                "-c"
-                ''printf %s "$content" > "$out"''
-              ];
+            write name content {
               outputHashMode = "flat";
               outputHashAlgo = "sha256";
               outputHash = builtins.hashString "sha256" declared;
             };
         in
         {
+          # Builds reproducibly, but has no hash to verify.
+          package = write "fixture-package" "package" { };
           good = fod {
             name = "fixture-good";
             content = "good";
