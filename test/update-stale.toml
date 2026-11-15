@@ -1,3 +1,0 @@
-[stale]
-installable = "path:./test/fixture#stale-updatable"
-file = "test/fixture/stale-hash.nix"

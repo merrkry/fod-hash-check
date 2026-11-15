@@ -5,3 +5,7 @@ file = "test/fixture/hashes.nix"
 [two]
 installable = "path:./test/fixture#updatable.two"
 file = "test/fixture/hashes.nix"
+
+[stale]
+installable = "path:./test/fixture#stale-updatable"
+file = "test/fixture/stale hash.nix"

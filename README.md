@@ -91,7 +91,7 @@ The action ignores other fields as well.
 
 ## Updating hashes
 
-With `update: true`, a hash mismatch does not fail the check. The action replaces the declared hash in the target's `file` with the hash Nix got, then runs the whole check again on the updated files. If that passes, the step succeeds with `updated` set to `true`, and committing the change is up to the workflow.
+With `update: true`, a hash mismatch does not fail the check. The action replaces the declared hash in the target's `file` with the hash Nix got, then runs the whole check again on the updated files. If that passes, the step succeeds with `updated` set to `true`, and committing the change is up to the workflow. If it fails, the action restores the files and fails.
 
 For example, to update Renovate pull requests with a GitHub App that can push to the repository:
 
@@ -158,7 +158,7 @@ Renovate stops updating a branch once someone else commits to it. List the app's
 
 1. Evaluates all installables in one `nix derivation show`, fails if any of them has no fixed output hash, and hashes their derivation paths, together with the system and a check version, into `key`. Different spellings of the same derivations share a key. The Nix version and other tooling are not part of the key, since they do not change whether a declared hash is correct.
 2. Looks up a cache entry for `key` without downloading it.
-3. On a miss, or with `use-cache: false`, builds the evaluated derivations with `nix build --no-link` to make the outputs valid, then with `nix build --no-link --rebuild` to fetch them again and compare. Both builds use `--keep-going`, so one run reports every mismatch.
+3. On a miss, or with `use-cache: false`, builds the evaluated derivations with `nix build --no-link` to make the outputs valid, then rebuilds those with valid outputs with `nix build --no-link --rebuild` to fetch them again and compare. Both builds run and use `--keep-going`, so one run reports every mismatch, whether it shows up in the build or only in the rebuild.
 4. Saves the cache entry right after the check succeeds, so a later failing step in the job does not discard the result.
 
 The marker file exists in the workspace only while it is being saved, so the action leaves the checkout unchanged.

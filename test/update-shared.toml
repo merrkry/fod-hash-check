@@ -1,0 +1,7 @@
+[old]
+installable = "path:./test/fixture#shared.old"
+file = "test/fixture/shared-hash.nix"
+
+[new]
+installable = "path:./test/fixture#shared.new"
+file = "test/fixture/shared-hash.nix"

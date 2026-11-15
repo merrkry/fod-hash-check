@@ -70,7 +70,12 @@ runs:
           echo "key=$key"
           echo "drvs=$drvs"
           echo "installables=${installables[*]}"
-          echo "files=$(tr '\n' ' ' <<< "${FILES:-}")"
+          # One file per line, since names may contain spaces.
+          echo "files<<FOD_HASH_CHECK_EOF"
+          if [ -n "${FILES:-}" ]; then
+            echo "$FILES"
+          fi
+          echo "FOD_HASH_CHECK_EOF"
         } >> "$GITHUB_OUTPUT"
 
     # Only cache-hit matters, so nothing is downloaded.
@@ -97,14 +102,31 @@ runs:
         read -r -a drvs <<< "$DRVS"
         log=$RUNNER_TEMP/fod-hash-check-build.log
 
-        # Builds, then rebuilds, the installables, and keeps a copy of the
-        # output in $log. --rebuild requires valid outputs, including on a
-        # clean store.
+        trace() {
+          echo "+ $*"
+          "$@"
+        }
+
+        # Builds the derivations, then rebuilds those whose outputs are valid,
+        # and keeps a copy of the output in $log. --rebuild needs valid
+        # outputs, including on a clean store, and fails as a whole if one is
+        # missing, e.g. after a mismatch in the first build. Both builds run
+        # either way, so the log has every mismatch.
         check() {
           {
-            set -x
-            nix build --no-link --no-write-lock-file --keep-going "$@" &&
-              nix build --no-link --no-write-lock-file --keep-going --rebuild "$@"
+            built=0
+            trace nix build --no-link --keep-going "$@" || built=$?
+            valid=()
+            for drv in "$@"; do
+              if nix path-info "$drv" > /dev/null 2>&1; then
+                valid+=("$drv")
+              fi
+            done
+            rebuilt=0
+            if [ "${#valid[@]}" -gt 0 ]; then
+              trace nix build --no-link --keep-going --rebuild "${valid[@]}" || rebuilt=$?
+            fi
+            [ "$built" -eq 0 ] && [ "$rebuilt" -eq 0 ]
           } 2>&1 | tee "$log"
         }
 
@@ -116,7 +138,12 @@ runs:
           exit 1
         fi
 
-        read -r -a files <<< "$FILES"
+        files=()
+        while IFS= read -r file; do
+          if [ -n "$file" ]; then
+            files+=("$file")
+          fi
+        done <<< "$FILES"
         for file in "${files[@]}"; do
           if [ ! -f "$file" ]; then
             echo "::error::File of a target not found: $file"
@@ -162,6 +189,15 @@ runs:
           exit 1
         fi
 
+        # Restored if the check after updating fails, e.g. because a replaced
+        # hash was also declared by a derivation that matched it.
+        backup=$RUNNER_TEMP/fod-hash-check-backup
+        rm -rf "$backup"
+        mkdir "$backup"
+        for i in "${!files[@]}"; do
+          cp "${files[$i]}" "$backup/$i"
+        done
+
         # Go through placeholders, so a new hash that equals another
         # specified hash is not replaced again.
         replace() {
@@ -178,7 +214,19 @@ runs:
 
         echo "Checking again with the updated hashes"
         read -r -a installables <<< "$INSTALLABLES"
-        if ! check "${installables[@]}"; then
+        recheck() {
+          local list updated_drvs=()
+          list=$(nix path-info --derivation --no-write-lock-file "${installables[@]}") || return 1
+          while IFS= read -r drv; do
+            updated_drvs+=("$drv^*")
+          done <<< "$list"
+          check "${updated_drvs[@]}"
+        }
+        if ! recheck; then
+          for i in "${!files[@]}"; do
+            cp "$backup/$i" "${files[$i]}"
+          done
+          echo "::error::The check failed after updating, so the files were restored"
           exit 1
         fi
         echo "::warning::Updated the hashes of fixed-output derivations; commit the changed files"

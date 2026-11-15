@@ -149,8 +149,16 @@ jobs:
       - name: Salt the fixture
         run: echo "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" > test/fixture/salt
 
-      - name: Update swapped hashes
-        id: swapped
+      # As on a Renovate branch whose previous output is cached: the plain
+      # build of stale-updatable passes, and only the rebuild finds the
+      # mismatch, while updatable.one and .two fail in the plain build.
+      - name: Make the stale output valid
+        run: |
+          nix build --no-link --no-write-lock-file path:./test/fixture#stale-original
+          nix build --no-link --no-write-lock-file path:./test/fixture#stale-updatable
+
+      - name: Update swapped and stale hashes
+        id: update
         uses: ./
         with:
           config: test/update.toml
@@ -162,25 +170,13 @@ jobs:
         with:
           config: test/update.toml
 
-      # As on a Renovate branch whose previous output is cached: the plain
-      # build passes, and only the rebuild finds the mismatch.
-      - name: Make the stale output valid
-        run: |
-          nix build --no-link --no-write-lock-file path:./test/fixture#stale-original
-          nix build --no-link --no-write-lock-file path:./test/fixture#stale-updatable
-
-      - name: Update a stale hash
-        id: stale
+      - name: Update a hash shared with a correct derivation
+        id: shared
+        continue-on-error: true
         uses: ./
         with:
-          config: test/update-stale.toml
+          config: test/update-shared.toml
           update: true
-
-      - name: Check the updated stale hash
-        id: stale-recheck
-        uses: ./
-        with:
-          config: test/update-stale.toml
 
       - name: Update a computed hash
         id: computed
@@ -192,11 +188,11 @@ jobs:
 
       - name: Assert results
         env:
-          SWAPPED: ${{ steps.swapped.outputs.updated }}
+          UPDATED: ${{ steps.update.outputs.updated }}
           RECHECK: ${{ steps.recheck.outcome }}
           RECHECK_UPDATED: ${{ steps.recheck.outputs.updated }}
-          STALE: ${{ steps.stale.outputs.updated }}
-          STALE_RECHECK: ${{ steps.stale-recheck.outcome }}
+          SHARED: ${{ steps.shared.outcome }}
+          SHARED_UPDATED: ${{ steps.shared.outputs.updated }}
           COMPUTED: ${{ steps.computed.outcome }}
           COMPUTED_UPDATED: ${{ steps.computed.outputs.updated }}
         run: |
@@ -209,12 +205,12 @@ jobs:
               status=1
             fi
           }
-          expect "swapped hashes are updated" "$SWAPPED" true
+          expect "swapped and stale hashes are updated" "$UPDATED" true
           expect "updated hashes pass" "$RECHECK" success
           expect "passing check updates nothing" "$RECHECK_UPDATED" false
-          expect "stale hash is updated" "$STALE" true
-          expect "updated stale hash passes" "$STALE_RECHECK" success
+          expect "shared hash fails" "$SHARED" failure
+          expect "shared hash is not updated" "$SHARED_UPDATED" false
           expect "computed hash fails" "$COMPUTED" failure
           expect "computed hash is not updated" "$COMPUTED_UPDATED" false
-          expect "only the hash files changed" "$(git status --porcelain | tr '\n' ' ')" " M test/fixture/hashes.nix  M test/fixture/stale-hash.nix "
+          expect "only the updated files changed" "$(git status --porcelain | tr '\n' ' ')" ' M test/fixture/hashes.nix  M "test/fixture/stale hash.nix" '
           exit "$status"

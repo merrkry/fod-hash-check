@@ -83,11 +83,27 @@
             content = "new";
             declared = "old";
           };
-          # Like stale, with its hash declared literally in stale-hash.nix.
+          # Like stale, with its hash declared literally in a file whose
+          # name contains a space.
           stale-updatable = write "fixture-stale" "new" {
             outputHashMode = "flat";
-            outputHash = import ./stale-hash.nix;
+            outputHash = import (./. + "/stale hash.nix");
           };
+          # Both declare the hash in shared-hash.nix, which only matches
+          # shared.old, so updating it for shared.new breaks shared.old.
+          shared =
+            builtins.mapAttrs
+              (
+                name: content:
+                write "fixture-shared-${name}" content {
+                  outputHashMode = "flat";
+                  outputHash = import ./shared-hash.nix;
+                }
+              )
+              {
+                old = "old";
+                new = "new";
+              };
         };
     in
     {
