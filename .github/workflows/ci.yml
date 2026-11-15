@@ -162,6 +162,26 @@ jobs:
         with:
           config: test/update.toml
 
+      # As on a Renovate branch whose previous output is cached: the plain
+      # build passes, and only the rebuild finds the mismatch.
+      - name: Make the stale output valid
+        run: |
+          nix build --no-link --no-write-lock-file path:./test/fixture#stale-original
+          nix build --no-link --no-write-lock-file path:./test/fixture#stale-updatable
+
+      - name: Update a stale hash
+        id: stale
+        uses: ./
+        with:
+          config: test/update-stale.toml
+          update: true
+
+      - name: Check the updated stale hash
+        id: stale-recheck
+        uses: ./
+        with:
+          config: test/update-stale.toml
+
       - name: Update a computed hash
         id: computed
         continue-on-error: true
@@ -175,6 +195,8 @@ jobs:
           SWAPPED: ${{ steps.swapped.outputs.updated }}
           RECHECK: ${{ steps.recheck.outcome }}
           RECHECK_UPDATED: ${{ steps.recheck.outputs.updated }}
+          STALE: ${{ steps.stale.outputs.updated }}
+          STALE_RECHECK: ${{ steps.stale-recheck.outcome }}
           COMPUTED: ${{ steps.computed.outcome }}
           COMPUTED_UPDATED: ${{ steps.computed.outputs.updated }}
         run: |
@@ -190,7 +212,9 @@ jobs:
           expect "swapped hashes are updated" "$SWAPPED" true
           expect "updated hashes pass" "$RECHECK" success
           expect "passing check updates nothing" "$RECHECK_UPDATED" false
+          expect "stale hash is updated" "$STALE" true
+          expect "updated stale hash passes" "$STALE_RECHECK" success
           expect "computed hash fails" "$COMPUTED" failure
           expect "computed hash is not updated" "$COMPUTED_UPDATED" false
-          expect "only the hash file changed" "$(git status --porcelain)" " M test/fixture/hashes.nix"
+          expect "only the hash files changed" "$(git status --porcelain | tr '\n' ' ')" " M test/fixture/hashes.nix  M test/fixture/stale-hash.nix "
           exit "$status"

@@ -91,32 +91,62 @@ The action ignores other fields as well.
 
 ## Updating hashes
 
-With `update: true`, a hash mismatch does not fail the check. The action replaces the declared hash in the target's `file` with the hash Nix got, then runs the whole check again on the updated files. If that passes, the step succeeds with `updated` set to `true`, and committing the change is up to the workflow. For example, on Renovate pull requests:
+With `update: true`, a hash mismatch does not fail the check. The action replaces the declared hash in the target's `file` with the hash Nix got, then runs the whole check again on the updated files. If that passes, the step succeeds with `updated` set to `true`, and committing the change is up to the workflow.
+
+For example, to update Renovate pull requests with a GitHub App that can push to the repository:
 
 ```yaml
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref }}
+          persist-credentials: false
       - uses: NixOS/nix-installer-action@v1
       - id: fod
         uses: merrkry/fod-hash-check@v0.1.0
         with:
-          update: ${{ github.actor == 'renovate[bot]' }}
+          # Only Renovate branches of this repository, never forks.
+          update: ${{ github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'renovate/') }}
+      # Created after the check, so the steps that build the pull request's
+      # code never hold a token that can push.
+      - id: app-token
+        if: steps.fod.outputs.updated == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
       - if: steps.fod.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          user_id=$(gh api "/users/$APP_SLUG%5Bbot%5D" --jq .id)
+          git config user.name "$APP_SLUG[bot]"
+          git config user.email "$user_id+$APP_SLUG[bot]@users.noreply.github.com"
           git commit -am "Update FOD hashes"
-          git push
+          git push "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git" "HEAD:$GITHUB_HEAD_REF"
 ```
 
-Pushes made with `GITHUB_TOKEN` do not start new workflow runs. Use a GitHub App or personal access token if checks must run on the pushed commit.
+The app token matters: commits pushed with `GITHUB_TOKEN` start no workflow runs, so required checks on them would never report.
+
+Renovate stops updating a branch once someone else commits to it. List the app's commit email in Renovate's [`gitIgnoredAuthors`](https://docs.renovatebot.com/configuration-options/#gitignoredauthors), so it keeps rebasing the pull request:
+
+```json
+{
+  "gitIgnoredAuthors": ["<user-id>+<app-slug>[bot]@users.noreply.github.com"]
+}
+```
+
+`<user-id>` is the ID of the app's bot user, from `https://api.github.com/users/<app-slug>%5Bbot%5D`.
 
 ### Known limitations
 

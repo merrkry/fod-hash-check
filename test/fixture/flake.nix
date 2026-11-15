@@ -83,6 +83,11 @@
             content = "new";
             declared = "old";
           };
+          # Like stale, with its hash declared literally in stale-hash.nix.
+          stale-updatable = write "fixture-stale" "new" {
+            outputHashMode = "flat";
+            outputHash = import ./stale-hash.nix;
+          };
         };
     in
     {
