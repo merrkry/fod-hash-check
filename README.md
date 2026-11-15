@@ -47,7 +47,7 @@ on:
 | `flake`      | `.`      | Flake reference.                                                                                                 |
 | `use-cache`  | `true`   | Skip the check when a success for the same key is cached. With `false`, always check, and still cache a success. |
 
-Attribute paths are dot-separated names, such as `web.pnpmDeps`. The action quotes each name, so names like `app+web` need no quoting. Names containing `.`, `"`, `\`, or `$` are not supported.
+Attribute paths are dot-separated names, such as `web.pnpmDeps`. Names are taken literally, so names like `app+web` need no quoting. Names containing `.`, `"`, `\`, or `$` are not supported.
 
 ## Outputs
 
@@ -60,7 +60,7 @@ Attribute paths are dot-separated names, such as `web.pnpmDeps`. The action quot
 
 1. Evaluates the `drvPath` of every attribute in one `nix eval` and hashes them, together with the system and a check version, into `key`. The Nix version and other tooling are not part of the key, since they do not change whether a declared hash is correct.
 2. Looks up a cache entry for `key` without downloading it.
-3. On a miss, or with `use-cache: false`, runs `nix build --no-link` to make the outputs valid, then `nix build --no-link --rebuild` to fetch them again and compare.
+3. On a miss, or with `use-cache: false`, builds the evaluated derivations with `nix build --no-link` to make the outputs valid, then with `nix build --no-link --rebuild` to fetch them again and compare.
 4. Saves the cache entry right after the check succeeds, so a later failing step in the job does not discard the result.
 
 The marker file exists in the workspace only while it is being saved, so the action leaves the checkout unchanged.

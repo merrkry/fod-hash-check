@@ -24,7 +24,12 @@
               declared ? content,
             }:
             derivation {
-              inherit name system content salt;
+              inherit
+                name
+                system
+                content
+                salt
+                ;
               builder = "/bin/sh";
               args = [
                 "-c"

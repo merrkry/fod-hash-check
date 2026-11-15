@@ -28,69 +28,31 @@ runs:
         CHECK_VERSION: "1"
         ATTRIBUTES: ${{ inputs.attributes }}
         FLAKE: ${{ inputs.flake }}
-        USE_CACHE: ${{ inputs.use-cache }}
       run: |
-        set -euo pipefail
-
-        case "$USE_CACHE" in
-          true | false) ;;
-          *)
-            echo "::error::use-cache must be true or false, got: $USE_CACHE"
-            exit 1
-            ;;
-        esac
-
-        # macOS ships bash 3.2, which has no mapfile.
-        attributes=()
-        while read -r attribute; do
-          attributes+=("$attribute")
-        done < <(tr -s '[:space:]' '\n' <<< "$ATTRIBUTES" | sed '/^$/d' | sort -u)
-        if [ "${#attributes[@]}" -eq 0 ]; then
-          echo "::error::attributes must list at least one attribute path"
+        # The attributes are passed to eval.nix as a string literal.
+        if [[ $ATTRIBUTES == *[\"\\\$]* ]]; then
+          echo '::error::attributes must not contain ", \ or $'
           exit 1
         fi
-
         system=$(nix eval --impure --raw --expr builtins.currentSystem)
-
-        # Quote every segment, so names such as foo+bar work in both the
-        # expression and the installables.
-        segment='[^."\$]+'
-        installables=()
-        fields=""
-        for attribute in "${attributes[@]}"; do
-          if ! [[ "$attribute" =~ ^$segment(\.$segment)*$ ]]; then
-            echo "::error::Unsupported attribute path: $attribute"
-            exit 1
-          fi
-          IFS=. read -r -a segments <<< "$attribute"
-          path=$(printf '."%s"' "${segments[@]}")
-          installables+=("$FLAKE#packages.\"$system\"$path")
-          fields+="\"$attribute\" = packages$path.drvPath; "
-        done
-
-        inputs=$(nix eval --json --no-write-lock-file "$FLAKE#packages.\"$system\"" --apply "packages: {
-          version = \"$CHECK_VERSION\";
-          system = \"$system\";
-          drvs = { $fields};
-        }")
-        echo "Key inputs: $inputs"
-        key=$(KEY_INPUTS=$inputs nix eval --impure --raw --expr 'builtins.hashString "sha256" (builtins.getEnv "KEY_INPUTS")')
+        result=$(nix eval --raw --no-write-lock-file "$FLAKE#packages.\"$system\"" --apply "
+          ($(cat "$GITHUB_ACTION_PATH/eval.nix")) {
+            version = \"$CHECK_VERSION\";
+            system = \"$system\";
+            attributes = \"$ATTRIBUTES\";
+          }")
+        read -r key installables <<< "$result"
         echo "Key: $key"
-
-        {
-          echo "key=$key"
-          echo "marker=.fod-hash-check-success"
-          echo "installables<<EOF"
-          printf '%s\n' "${installables[@]}"
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
+        echo "Derivations: $installables"
+        echo "key=$key" >> "$GITHUB_OUTPUT"
+        echo "installables=$installables" >> "$GITHUB_OUTPUT"
 
     # Only cache-hit matters, so nothing is downloaded.
     - name: Look up cached success
       id: restore
       uses: actions/cache/restore@v6
       with:
-        path: ${{ steps.key.outputs.marker }}
+        path: .fod-hash-check-success
         key: fod-hash-check-${{ steps.key.outputs.key }}
         lookup-only: true
 
@@ -100,23 +62,13 @@ runs:
       shell: bash
       env:
         INSTALLABLES: ${{ steps.key.outputs.installables }}
-        KEY: ${{ steps.key.outputs.key }}
-        MARKER: ${{ steps.key.outputs.marker }}
       run: |
-        set -euo pipefail
-        installables=()
-        while read -r installable; do
-          installables+=("$installable")
-        done <<< "$INSTALLABLES"
-        command=(nix build --no-link --no-write-lock-file)
-
-        # --rebuild requires valid outputs, including on a clean store.
+        read -r -a installables <<< "$INSTALLABLES"
         set -x
-        "${command[@]}" "${installables[@]}"
-        "${command[@]}" --rebuild "${installables[@]}"
-        { set +x; } 2> /dev/null
-
-        echo "$KEY" > "$GITHUB_WORKSPACE/$MARKER"
+        # --rebuild requires valid outputs, including on a clean store.
+        nix build --no-link "${installables[@]}"
+        nix build --no-link --rebuild "${installables[@]}"
+        touch .fod-hash-check-success
 
     # Saved here rather than in a post step, so a later failure in the job
     # keeps the result.
@@ -124,12 +76,10 @@ runs:
       if: steps.check.outcome == 'success' && steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       with:
-        path: ${{ steps.key.outputs.marker }}
+        path: .fod-hash-check-success
         key: fod-hash-check-${{ steps.key.outputs.key }}
 
     - name: Remove marker
-      if: always() && steps.key.outputs.marker != ''
+      if: always()
       shell: bash
-      env:
-        MARKER: ${{ steps.key.outputs.marker }}
-      run: rm -f "$GITHUB_WORKSPACE/$MARKER"
+      run: rm -f .fod-hash-check-success
