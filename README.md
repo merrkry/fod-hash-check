@@ -59,11 +59,12 @@ on:
 
 ## Inputs
 
-| Input          | Default           | Description                                                                                                      |
-| -------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `config`       | `fod-hashes.toml` | TOML file listing the FODs to check. Read only when `installables` is not set.                                   |
-| `installables` |                   | Nix installables to check, separated by whitespace or newlines. Set either this or `config`, not both.           |
-| `use-cache`    | `true`            | Skip the check when a success for the same key is cached. With `false`, always check, and still cache a success. |
+| Input          | Default           | Description                                                                                                                                   |
+| -------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config`       | `fod-hashes.toml` | TOML file listing the FODs to check. Read only when `installables` is not set.                                                                |
+| `installables` |                   | Nix installables to check, separated by whitespace or newlines. Set either this or `config`, not both.                                        |
+| `use-cache`    | `true`            | Skip the check when a success for the same key is cached. With `false`, always check, and still cache a success.                              |
+| `update`       | `false`           | On a hash mismatch, write the correct hash into the target's `file` and check again. Needs `config`. See [Updating hashes](#updating-hashes). |
 
 Installables follow the same rules as `nix build`: `.#web.pnpmDeps` resolves to `packages.<system>.web.pnpmDeps` or `legacyPackages.<system>.web.pnpmDeps`, and full attribute paths such as `.#checks.x86_64-linux.foo` also work. Relative flake references like `.` resolve against the workspace, not the config file. Lock files are not written.
 
@@ -73,10 +74,10 @@ Each installable must be a fixed-output derivation, such as `.#web.pnpmDeps` rat
 
 Each table in the config file is a target. The table name identifies the target, and these fields describe it:
 
-| Field         | Required | Description                                                                             |
-| ------------- | -------- | --------------------------------------------------------------------------------------- |
-| `installable` | yes      | Nix installable of the FOD.                                                             |
-| `file`        | no       | File that declares the FOD's hash, for tools that update hashes. The action ignores it. |
+| Field         | Required | Description                                                                     |
+| ------------- | -------- | ------------------------------------------------------------------------------- |
+| `installable` | yes      | Nix installable of the FOD.                                                     |
+| `file`        | no       | File that declares the FOD's hash, relative to the workspace. Used by `update`. |
 
 The action ignores other fields as well.
 
@@ -86,6 +87,42 @@ The action ignores other fields as well.
 | ----------- | ------------------------------------------------------------------------------------------- |
 | `key`       | SHA-256 over the check version, the current system, and the installables' derivation paths. |
 | `cache-hit` | `true` if the check was skipped because a success for `key` was cached.                     |
+| `updated`   | `true` if `update` wrote new hashes into the files of the targets.                          |
+
+## Updating hashes
+
+With `update: true`, a hash mismatch does not fail the check. The action replaces the declared hash in the target's `file` with the hash Nix got, then runs the whole check again on the updated files. If that passes, the step succeeds with `updated` set to `true`, and committing the change is up to the workflow. For example, on Renovate pull requests:
+
+```yaml
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: NixOS/nix-installer-action@v1
+      - id: fod
+        uses: merrkry/fod-hash-check@v0.1.0
+        with:
+          update: ${{ github.actor == 'renovate[bot]' }}
+      - if: steps.fod.outputs.updated == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Update FOD hashes"
+          git push
+```
+
+Pushes made with `GITHUB_TOKEN` do not start new workflow runs. Use a GitHub App or personal access token if checks must run on the pushed commit.
+
+### Known limitations
+
+- The declared hash must appear literally in SRI form, such as `sha256-…`, exactly once across the targets' files, and belong to a single derivation. Otherwise the action fails and prints the correct hash, to be filled in by hand. This covers hashes written in other forms, computed hashes, and placeholders like `lib.fakeHash`.
+- The hashes Nix got are read from the text of its hash mismatch errors, which Nix and Lix print the same way, but which is not a stable interface.
+- An update run fetches the targets twice, since it checks again after updating. It saves no cache entry, so the next run checks the updated derivations once more.
 
 ## How it works
 

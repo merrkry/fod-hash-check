@@ -10,6 +10,9 @@ inputs:
   use-cache:
     description: Skip the check when a success for the same derivations is cached. With false, always check.
     default: "true"
+  update:
+    description: On a hash mismatch, write the correct hash into the file of the target and check again. Needs config.
+    default: "false"
 outputs:
   key:
     description: SHA-256 over the check version, the system, and the derivation paths of the installables
@@ -17,6 +20,9 @@ outputs:
   cache-hit:
     description: Whether the check was skipped because a success for the same key was cached
     value: ${{ steps.check.outcome == 'skipped' }}
+  updated:
+    description: Whether update wrote new hashes into the files of the targets
+    value: ${{ steps.check.outputs.updated == 'true' }}
 runs:
   using: composite
   steps:
@@ -28,9 +34,14 @@ runs:
         CHECK_VERSION: "1"
         INSTALLABLES: ${{ inputs.installables }}
         CONFIG: ${{ inputs.config }}
+        UPDATE: ${{ inputs.update }}
       run: |
         if [ -n "$INSTALLABLES" ] && [ -n "$CONFIG" ]; then
           echo "::error::Set either installables or config, not both"
+          exit 1
+        fi
+        if [ -n "$INSTALLABLES" ] && [ "$UPDATE" = true ]; then
+          echo "::error::update needs config, which lists the files to update"
           exit 1
         fi
         if [ -z "$INSTALLABLES" ]; then
@@ -40,7 +51,9 @@ runs:
             exit 1
           fi
           [[ $CONFIG == /* ]] || CONFIG=$PWD/$CONFIG
-          INSTALLABLES=$(CONFIG=$CONFIG nix eval --impure --raw --file "$GITHUB_ACTION_PATH/config.nix")
+          export CONFIG
+          INSTALLABLES=$(nix eval --impure --raw --file "$GITHUB_ACTION_PATH/config.nix" installables)
+          FILES=$(nix eval --impure --raw --file "$GITHUB_ACTION_PATH/config.nix" files)
         fi
         read -r -d '' -a installables <<< "$INSTALLABLES" || true
         if [ "${#installables[@]}" -eq 0 ]; then
@@ -52,9 +65,13 @@ runs:
         result=$(nix eval --impure --raw --file "$GITHUB_ACTION_PATH/key.nix")
         read -r key drvs <<< "$result"
         echo "Key: $key"
-        echo "key=$key" >> "$GITHUB_OUTPUT"
         echo "Derivations: $drvs"
-        echo "drvs=$drvs" >> "$GITHUB_OUTPUT"
+        {
+          echo "key=$key"
+          echo "drvs=$drvs"
+          echo "installables=${installables[*]}"
+          echo "files=$(tr '\n' ' ' <<< "${FILES:-}")"
+        } >> "$GITHUB_OUTPUT"
 
     # Only cache-hit matters, so nothing is downloaded.
     - name: Look up cached success
@@ -71,18 +88,106 @@ runs:
       shell: bash
       env:
         DRVS: ${{ steps.key.outputs.drvs }}
+        INSTALLABLES: ${{ steps.key.outputs.installables }}
+        FILES: ${{ steps.key.outputs.files }}
+        UPDATE: ${{ inputs.update }}
+        # The mismatches are read from the build log.
+        NO_COLOR: "1"
       run: |
         read -r -a drvs <<< "$DRVS"
-        set -x
-        # --rebuild requires valid outputs, including on a clean store.
-        nix build --no-link --keep-going "${drvs[@]}"
-        nix build --no-link --keep-going --rebuild "${drvs[@]}"
-        touch .fod-hash-check-success
+        log=$RUNNER_TEMP/fod-hash-check-build.log
+
+        # Builds, then rebuilds, the installables, and keeps a copy of the
+        # output in $log. --rebuild requires valid outputs, including on a
+        # clean store.
+        check() {
+          {
+            set -x
+            nix build --no-link --no-write-lock-file --keep-going "$@" &&
+              nix build --no-link --no-write-lock-file --keep-going --rebuild "$@"
+          } 2>&1 | tee "$log"
+        }
+
+        if check "${drvs[@]}"; then
+          touch .fod-hash-check-success
+          exit 0
+        fi
+        if [ "$UPDATE" != true ]; then
+          exit 1
+        fi
+
+        read -r -a files <<< "$FILES"
+        for file in "${files[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "::error::File of a target not found: $file"
+            exit 1
+          fi
+        done
+
+        # Find every hash before changing any file. Each specified hash must
+        # belong to one mismatch and occur exactly once across the files.
+        specified=()
+        got=()
+        targets=()
+        failed=false
+        while read -r old new; do
+          for seen in "${specified[@]}"; do
+            if [ "$seen" = "$old" ]; then
+              echo "::error::Several derivations declare $old, so it was not updated."
+              failed=true
+              continue 2
+            fi
+          done
+          matches=()
+          for file in "${files[@]}"; do
+            count=$({ grep -oF -- "$old" "$file" || true; } | wc -l)
+            for ((i = 0; i < count; i++)); do
+              matches+=("$file")
+            done
+          done
+          if [ "${#matches[@]}" -ne 1 ]; then
+            echo "::error::Found $old ${#matches[@]} times in the files of the targets, so it was not updated. The correct hash is $new."
+            failed=true
+            continue
+          fi
+          specified+=("$old")
+          got+=("$new")
+          targets+=("${matches[0]}")
+        done < <(awk '
+          /hash mismatch in fixed-output derivation/ { mismatch = 1 }
+          mismatch && $1 == "specified:" { specified = $2 }
+          mismatch && $1 == "got:" { print specified, $2; mismatch = 0 }
+        ' "$log")
+        if [ "$failed" = true ] || [ "${#specified[@]}" -eq 0 ]; then
+          exit 1
+        fi
+
+        # Go through placeholders, so a new hash that equals another
+        # specified hash is not replaced again.
+        replace() {
+          sed -i.fod-hash-check "s|$1|$2|" "$3"
+          rm "$3.fod-hash-check"
+        }
+        for i in "${!specified[@]}"; do
+          replace "${specified[$i]}" "@fod-hash-check-$i@" "${targets[$i]}"
+        done
+        for i in "${!specified[@]}"; do
+          replace "@fod-hash-check-$i@" "${got[$i]}" "${targets[$i]}"
+          echo "Updated ${targets[$i]}: ${specified[$i]} -> ${got[$i]}"
+        done
+
+        echo "Checking again with the updated hashes"
+        read -r -a installables <<< "$INSTALLABLES"
+        if ! check "${installables[@]}"; then
+          exit 1
+        fi
+        echo "::warning::Updated the hashes of fixed-output derivations; commit the changed files"
+        echo "updated=true" >> "$GITHUB_OUTPUT"
 
     # Saved here rather than in a post step, so a later failure in the job
     # keeps the result.
     - name: Cache success
-      if: steps.check.outcome == 'success' && steps.restore.outputs.cache-hit != 'true'
+      if: steps.check.outcome == 'success' && steps.check.outputs.updated != 'true' && steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       with:
         path: .fod-hash-check-success

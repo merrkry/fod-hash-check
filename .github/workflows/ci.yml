@@ -135,3 +135,62 @@ jobs:
           expect "workspace is unchanged" "$(git status --porcelain)" ""
           [ "${#FIRST_KEY}" -eq 64 ] || { echo "::error::key is not a SHA-256: $FIRST_KEY"; status=1; }
           exit "$status"
+
+  update:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: NixOS/nix-installer-action@v1
+
+      - name: Salt the fixture
+        run: echo "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" > test/fixture/salt
+
+      - name: Update swapped hashes
+        id: swapped
+        uses: ./
+        with:
+          config: test/update.toml
+          update: true
+
+      - name: Check the updated hashes
+        id: recheck
+        uses: ./
+        with:
+          config: test/update.toml
+
+      - name: Update a computed hash
+        id: computed
+        continue-on-error: true
+        uses: ./
+        with:
+          config: test/update-computed.toml
+          update: true
+
+      - name: Assert results
+        env:
+          SWAPPED: ${{ steps.swapped.outputs.updated }}
+          RECHECK: ${{ steps.recheck.outcome }}
+          RECHECK_UPDATED: ${{ steps.recheck.outputs.updated }}
+          COMPUTED: ${{ steps.computed.outcome }}
+          COMPUTED_UPDATED: ${{ steps.computed.outputs.updated }}
+        run: |
+          status=0
+          expect() {
+            if [ "$2" = "$3" ]; then
+              echo "ok: $1"
+            else
+              echo "::error::$1: expected '$3', got '$2'"
+              status=1
+            fi
+          }
+          expect "swapped hashes are updated" "$SWAPPED" true
+          expect "updated hashes pass" "$RECHECK" success
+          expect "passing check updates nothing" "$RECHECK_UPDATED" false
+          expect "computed hash fails" "$COMPUTED" failure
+          expect "computed hash is not updated" "$COMPUTED_UPDATED" false
+          expect "only the hash file changed" "$(git status --porcelain)" " M test/fixture/hashes.nix"
+          exit "$status"

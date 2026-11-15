@@ -1,0 +1,4 @@
+# The hash of wrong is computed, so it cannot be updated.
+[wrong]
+installable = "path:./test/fixture#wrong"
+file = "test/fixture/flake.nix"

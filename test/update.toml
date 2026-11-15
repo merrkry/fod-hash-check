@@ -1,0 +1,7 @@
+[one]
+installable = "path:./test/fixture#updatable.one"
+file = "test/fixture/hashes.nix"
+
+[two]
+installable = "path:./test/fixture#updatable.two"
+file = "test/fixture/hashes.nix"

@@ -65,6 +65,14 @@
             content = "actual";
             declared = "declared";
           };
+          # Their hashes are declared literally in hashes.nix, for update.
+          updatable = builtins.mapAttrs (
+            name: hash:
+            write "fixture-${name}" name {
+              outputHashMode = "flat";
+              outputHash = hash;
+            }
+          ) (import ./hashes.nix);
           # Same name and hash, so both have the same output path.
           stale-original = fod {
             name = "fixture-stale";
