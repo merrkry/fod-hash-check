@@ -1,0 +1,122 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install actionlint
+        run: bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+      - name: Run actionlint
+        run: ./actionlint -color
+      # actionlint covers workflows only, so check the action's scripts here.
+      # Their variables come from env:, which shellcheck cannot see.
+      - name: Run shellcheck on action.yml
+        run: |
+          count=$(yq '.runs.steps | length' action.yml)
+          for ((i = 0; i < count; i++)); do
+            if [ "$(yq ".runs.steps[$i].shell" action.yml)" = bash ]; then
+              echo "Checking step $i: $(yq ".runs.steps[$i].name" action.yml)"
+              yq ".runs.steps[$i].run" action.yml |
+                shellcheck --shell=bash --exclude=SC2153,SC2154 -
+            fi
+          done
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      FIXTURE: path:./test/fixture
+    steps:
+      - uses: actions/checkout@v7
+      - uses: NixOS/nix-installer-action@v1
+
+      # A fresh salt per run gives new derivations and cache keys, so the
+      # first check below always misses the cache.
+      - name: Salt the fixture
+        run: echo "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" > test/fixture/salt
+
+      - name: Check correct hashes
+        id: first
+        uses: ./
+        with:
+          flake: ${{ env.FIXTURE }}
+          attributes: |
+            good
+            app+web.deps
+
+      - name: Check again with unchanged derivations
+        id: second
+        uses: ./
+        with:
+          flake: ${{ env.FIXTURE }}
+          attributes: app+web.deps good
+
+      - name: Check again without the cache
+        id: uncached
+        uses: ./
+        with:
+          flake: ${{ env.FIXTURE }}
+          attributes: good app+web.deps
+          use-cache: false
+
+      - name: Check a wrong hash
+        id: wrong
+        continue-on-error: true
+        uses: ./
+        with:
+          flake: ${{ env.FIXTURE }}
+          attributes: good wrong
+
+      # stale shares its output path with stale-original, so once that is
+      # built, a plain build of stale succeeds without running its builder.
+      - name: Make the stale output valid
+        run: |
+          nix build --no-link --no-write-lock-file "$FIXTURE#stale-original"
+          nix build --no-link --no-write-lock-file "$FIXTURE#stale"
+
+      - name: Check a stale hash
+        id: stale
+        continue-on-error: true
+        uses: ./
+        with:
+          flake: ${{ env.FIXTURE }}
+          attributes: stale
+
+      - name: Assert results
+        env:
+          FIRST_KEY: ${{ steps.first.outputs.key }}
+          FIRST_HIT: ${{ steps.first.outputs.cache-hit }}
+          SECOND_KEY: ${{ steps.second.outputs.key }}
+          SECOND_HIT: ${{ steps.second.outputs.cache-hit }}
+          UNCACHED_KEY: ${{ steps.uncached.outputs.key }}
+          UNCACHED_HIT: ${{ steps.uncached.outputs.cache-hit }}
+          WRONG: ${{ steps.wrong.outcome }}
+          STALE: ${{ steps.stale.outcome }}
+        run: |
+          status=0
+          expect() {
+            if [ "$2" = "$3" ]; then
+              echo "ok: $1"
+            else
+              echo "::error::$1: expected '$3', got '$2'"
+              status=1
+            fi
+          }
+          expect "first check misses the cache" "$FIRST_HIT" false
+          expect "second check hits the cache" "$SECOND_HIT" true
+          expect "second check has the same key" "$SECOND_KEY" "$FIRST_KEY"
+          expect "uncached check skips the cache" "$UNCACHED_HIT" false
+          expect "uncached check has the same key" "$UNCACHED_KEY" "$FIRST_KEY"
+          expect "wrong hash fails" "$WRONG" failure
+          expect "stale hash fails" "$STALE" failure
+          expect "workspace is unchanged" "$(git status --porcelain)" ""
+          [ "${#FIRST_KEY}" -eq 64 ] || { echo "::error::key is not a SHA-256: $FIRST_KEY"; status=1; }
+          exit "$status"
