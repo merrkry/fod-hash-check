@@ -31,13 +31,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: NixOS/nix-installer-action@v1
-      - uses: merrkry/fod-hash-check@v0.1.0
+      - uses: merrkry/fod-hash-check@v0.2.0
 ```
 
 To skip the file, list the installables in the workflow instead:
 
 ```yaml
-- uses: merrkry/fod-hash-check@v0.1.0
+- uses: merrkry/fod-hash-check@v0.2.0
   with:
     installables: |
       .#web.pnpmDeps
@@ -52,7 +52,7 @@ on:
     - cron: "0 4 * * 1"
 
 # ...
-- uses: merrkry/fod-hash-check@v0.1.0
+- uses: merrkry/fod-hash-check@v0.2.0
   with:
     use-cache: false
 ```
@@ -112,7 +112,7 @@ jobs:
           persist-credentials: false
       - uses: NixOS/nix-installer-action@v1
       - id: fod
-        uses: merrkry/fod-hash-check@v0.1.0
+        uses: merrkry/fod-hash-check@v0.2.0
         with:
           # Only Renovate branches of this repository, never forks.
           update: ${{ github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'renovate/') }}
