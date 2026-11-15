@@ -111,7 +111,9 @@ runs:
         # and keeps a copy of the output in $log. --rebuild needs valid
         # outputs, including on a clean store, and fails as a whole if one is
         # missing, e.g. after a mismatch in the first build. Both builds run
-        # either way, so the log has every mismatch.
+        # either way, so the log has every mismatch. The check passes only if
+        # every derivation was rebuilt, so an output that went missing in
+        # between, e.g. to garbage collection, fails it.
         check() {
           {
             built=0
@@ -126,7 +128,7 @@ runs:
             if [ "${#valid[@]}" -gt 0 ]; then
               trace nix build --no-link --keep-going --rebuild "${valid[@]}" || rebuilt=$?
             fi
-            [ "$built" -eq 0 ] && [ "$rebuilt" -eq 0 ]
+            [ "$built" -eq 0 ] && [ "$rebuilt" -eq 0 ] && [ "${#valid[@]}" -eq "$#" ]
           } 2>&1 | tee "$log"
         }
 
