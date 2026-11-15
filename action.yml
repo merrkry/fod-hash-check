@@ -1,18 +1,15 @@
 name: Check FOD hashes
-description: Verify the declared hashes of fixed-output derivations in a flake, skipping the check when the derivations have not changed since the last success
+description: Verify the declared hashes of fixed-output derivations in Nix, skipping the check when the derivations have not changed since the last success
 inputs:
-  attributes:
-    description: Attribute paths under packages.<system> of the flake, separated by whitespace or newlines, such as amphi-web.pnpmDeps
+  installables:
+    description: Nix installables to check, separated by whitespace or newlines, such as .#web.pnpmDeps
     required: true
-  flake:
-    description: Flake reference
-    default: .
   use-cache:
     description: Skip the check when a success for the same derivations is cached. With false, always check.
     default: "true"
 outputs:
   key:
-    description: SHA-256 over the check version, the system, and the derivation paths of the attributes
+    description: SHA-256 over the check version, the system, and the derivation paths of the installables
     value: ${{ steps.key.outputs.key }}
   cache-hit:
     description: Whether the check was skipped because a success for the same key was cached
@@ -26,26 +23,22 @@ runs:
       env:
         # Bump only when the check itself changes what it verifies.
         CHECK_VERSION: "1"
-        ATTRIBUTES: ${{ inputs.attributes }}
-        FLAKE: ${{ inputs.flake }}
+        INSTALLABLES: ${{ inputs.installables }}
       run: |
-        # The attributes are passed to eval.nix as a string literal.
-        if [[ $ATTRIBUTES == *[\"\\\$]* ]]; then
-          echo '::error::attributes must not contain ", \ or $'
+        read -r -d '' -a installables <<< "$INSTALLABLES" || true
+        if [ "${#installables[@]}" -eq 0 ]; then
+          echo "::error::installables must list at least one installable"
           exit 1
         fi
         system=$(nix eval --impure --raw --expr builtins.currentSystem)
-        result=$(nix eval --raw --no-write-lock-file "$FLAKE#packages.\"$system\"" --apply "
-          ($(cat "$GITHUB_ACTION_PATH/eval.nix")) {
-            version = \"$CHECK_VERSION\";
-            system = \"$system\";
-            attributes = \"$ATTRIBUTES\";
-          }")
-        read -r key installables <<< "$result"
+        drvs=$(nix path-info --derivation --no-write-lock-file "${installables[@]}" | LC_ALL=C sort -u)
+        inputs=$(printf '%s\n' "$CHECK_VERSION" "$system" "$drvs")
+        echo "Key inputs:"
+        echo "$inputs"
+        key=$(KEY_INPUTS=$inputs nix eval --impure --raw --expr 'builtins.hashString "sha256" (builtins.getEnv "KEY_INPUTS")')
         echo "Key: $key"
-        echo "Derivations: $installables"
         echo "key=$key" >> "$GITHUB_OUTPUT"
-        echo "installables=$installables" >> "$GITHUB_OUTPUT"
+        echo "drvs=$(tr '\n' ' ' <<< "$drvs")" >> "$GITHUB_OUTPUT"
 
     # Only cache-hit matters, so nothing is downloaded.
     - name: Look up cached success
@@ -61,13 +54,13 @@ runs:
       if: inputs.use-cache != 'true' || steps.restore.outputs.cache-hit != 'true'
       shell: bash
       env:
-        INSTALLABLES: ${{ steps.key.outputs.installables }}
+        DRVS: ${{ steps.key.outputs.drvs }}
       run: |
-        read -r -a installables <<< "$INSTALLABLES"
+        read -r -a drvs <<< "$DRVS"
         set -x
         # --rebuild requires valid outputs, including on a clean store.
-        nix build --no-link "${installables[@]}"
-        nix build --no-link --rebuild "${installables[@]}"
+        nix build --no-link "${drvs[@]/%/^*}"
+        nix build --no-link --rebuild "${drvs[@]/%/^*}"
         touch .fod-hash-check-success
 
     # Saved here rather than in a post step, so a later failure in the job

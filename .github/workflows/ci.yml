@@ -32,8 +32,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    env:
-      FIXTURE: path:./test/fixture
     steps:
       - uses: actions/checkout@v7
       - uses: NixOS/nix-installer-action@v1
@@ -47,24 +45,21 @@ jobs:
         id: first
         uses: ./
         with:
-          flake: ${{ env.FIXTURE }}
-          attributes: |
-            good
-            app+web.deps
+          installables: |
+            path:./test/fixture#good
+            path:./test/fixture#app+web.deps
 
       - name: Check again with unchanged derivations
         id: second
         uses: ./
         with:
-          flake: ${{ env.FIXTURE }}
-          attributes: app+web.deps good
+          installables: path:./test/fixture#app+web.deps path:./test/fixture#good
 
       - name: Check again without the cache
         id: uncached
         uses: ./
         with:
-          flake: ${{ env.FIXTURE }}
-          attributes: good app+web.deps
+          installables: path:./test/fixture#good path:./test/fixture#app+web.deps
           use-cache: false
 
       - name: Check a wrong hash
@@ -72,23 +67,21 @@ jobs:
         continue-on-error: true
         uses: ./
         with:
-          flake: ${{ env.FIXTURE }}
-          attributes: good wrong
+          installables: path:./test/fixture#good path:./test/fixture#wrong
 
       # stale shares its output path with stale-original, so once that is
       # built, a plain build of stale succeeds without running its builder.
       - name: Make the stale output valid
         run: |
-          nix build --no-link --no-write-lock-file "$FIXTURE#stale-original"
-          nix build --no-link --no-write-lock-file "$FIXTURE#stale"
+          nix build --no-link --no-write-lock-file path:./test/fixture#stale-original
+          nix build --no-link --no-write-lock-file path:./test/fixture#stale
 
       - name: Check a stale hash
         id: stale
         continue-on-error: true
         uses: ./
         with:
-          flake: ${{ env.FIXTURE }}
-          attributes: stale
+          installables: path:./test/fixture#stale
 
       - name: Assert results
         env:
