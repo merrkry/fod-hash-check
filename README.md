@@ -69,4 +69,3 @@ The marker file exists in the workspace only while it is being saved, so the act
 
 - Nix with flakes enabled, installed by an earlier step, such as [NixOS/nix-installer-action](https://github.com/NixOS/nix-installer-action). The action does not install Nix.
 - Credentials the fetches need, such as GitHub access tokens in `NIX_CONFIG`.
-- Bash 4 or newer as `bash`, which GitHub-hosted runners provide.

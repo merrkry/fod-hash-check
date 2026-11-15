@@ -40,7 +40,11 @@ runs:
             ;;
         esac
 
-        mapfile -t attributes < <(tr -s '[:space:]' '\n' <<< "$ATTRIBUTES" | sed '/^$/d' | sort -u)
+        # macOS ships bash 3.2, which has no mapfile.
+        attributes=()
+        while read -r attribute; do
+          attributes+=("$attribute")
+        done < <(tr -s '[:space:]' '\n' <<< "$ATTRIBUTES" | sed '/^$/d' | sort -u)
         if [ "${#attributes[@]}" -eq 0 ]; then
           echo "::error::attributes must list at least one attribute path"
           exit 1
@@ -100,7 +104,10 @@ runs:
         MARKER: ${{ steps.key.outputs.marker }}
       run: |
         set -euo pipefail
-        mapfile -t installables <<< "$INSTALLABLES"
+        installables=()
+        while read -r installable; do
+          installables+=("$installable")
+        done <<< "$INSTALLABLES"
         command=(nix build --no-link --no-write-lock-file)
 
         # --rebuild requires valid outputs, including on a clean store.
