@@ -1,0 +1,6 @@
+[good]
+installable = "path:./test/fixture#good"
+file = "test/fixture/flake.nix"
+
+[deps]
+installable = "path:./test/fixture#app+web.deps"

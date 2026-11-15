@@ -2,8 +2,11 @@ name: Check FOD hashes
 description: Verify the declared hashes of fixed-output derivations in Nix, skipping the check when the derivations have not changed since the last success
 inputs:
   installables:
-    description: Nix installables to check, separated by whitespace or newlines, such as .#web.pnpmDeps
-    required: true
+    description: Nix installables to check, separated by whitespace or newlines, such as .#web.pnpmDeps. Set either this or config.
+    default: ""
+  config:
+    description: TOML file listing the installables to check. Defaults to fod-hashes.toml when installables is not set.
+    default: ""
   use-cache:
     description: Skip the check when a success for the same derivations is cached. With false, always check.
     default: "true"
@@ -24,10 +27,24 @@ runs:
         # Bump only when the check itself changes what it verifies.
         CHECK_VERSION: "1"
         INSTALLABLES: ${{ inputs.installables }}
+        CONFIG: ${{ inputs.config }}
       run: |
+        if [ -n "$INSTALLABLES" ] && [ -n "$CONFIG" ]; then
+          echo "::error::Set either installables or config, not both"
+          exit 1
+        fi
+        if [ -z "$INSTALLABLES" ]; then
+          CONFIG=${CONFIG:-fod-hashes.toml}
+          if [ ! -f "$CONFIG" ]; then
+            echo "::error::Config file not found: $CONFIG"
+            exit 1
+          fi
+          [[ $CONFIG == /* ]] || CONFIG=$PWD/$CONFIG
+          INSTALLABLES=$(CONFIG=$CONFIG nix eval --impure --raw --file "$GITHUB_ACTION_PATH/config.nix")
+        fi
         read -r -d '' -a installables <<< "$INSTALLABLES" || true
         if [ "${#installables[@]}" -eq 0 ]; then
-          echo "::error::installables must list at least one installable"
+          echo "::error::No installables to check"
           exit 1
         fi
         export DERIVATIONS=$RUNNER_TEMP/fod-hash-check-derivations.json

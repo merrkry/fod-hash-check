@@ -55,6 +55,12 @@ jobs:
         with:
           installables: path:./test/fixture#app+web.deps path:./test/fixture#good
 
+      - name: Check again via a config file
+        id: config
+        uses: ./
+        with:
+          config: test/fod-hashes.toml
+
       - name: Check again without the cache
         id: uncached
         uses: ./
@@ -97,6 +103,8 @@ jobs:
           FIRST_HIT: ${{ steps.first.outputs.cache-hit }}
           SECOND_KEY: ${{ steps.second.outputs.key }}
           SECOND_HIT: ${{ steps.second.outputs.cache-hit }}
+          CONFIG_KEY: ${{ steps.config.outputs.key }}
+          CONFIG_HIT: ${{ steps.config.outputs.cache-hit }}
           UNCACHED_KEY: ${{ steps.uncached.outputs.key }}
           UNCACHED_HIT: ${{ steps.uncached.outputs.cache-hit }}
           WRONG: ${{ steps.wrong.outcome }}
@@ -116,6 +124,8 @@ jobs:
           expect "first check misses the cache" "$FIRST_HIT" false
           expect "second check hits the cache" "$SECOND_HIT" true
           expect "second check has the same key" "$SECOND_KEY" "$FIRST_KEY"
+          expect "config check hits the cache" "$CONFIG_HIT" true
+          expect "config check has the same key" "$CONFIG_KEY" "$FIRST_KEY"
           expect "uncached check skips the cache" "$UNCACHED_HIT" false
           expect "uncached check has the same key" "$UNCACHED_KEY" "$FIRST_KEY"
           expect "wrong hash fails" "$WRONG" failure

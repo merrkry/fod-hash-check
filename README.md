@@ -8,6 +8,19 @@ Rebuilding is slow for large fetches, such as pnpm or Cargo dependencies. After 
 
 ## Usage
 
+List the FODs to check in `fod-hashes.toml` at the repository root:
+
+```toml
+[web]
+installable = ".#web.pnpmDeps"
+file = "nix/web.nix"
+
+[server]
+installable = ".#server.cargoDeps"
+```
+
+Then run the action after installing Nix:
+
 ```yaml
 jobs:
   check:
@@ -19,10 +32,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: NixOS/nix-installer-action@v1
       - uses: merrkry/fod-hash-check@v0.1.0
-        with:
-          installables: |
-            .#web.pnpmDeps
-            .#server.cargoDeps
+```
+
+To skip the file, list the installables in the workflow instead:
+
+```yaml
+- uses: merrkry/fod-hash-check@v0.1.0
+  with:
+    installables: |
+      .#web.pnpmDeps
+      .#server.cargoDeps
 ```
 
 To also catch sources that disappear upstream, run the check without the cache on a schedule:
@@ -33,22 +52,33 @@ on:
     - cron: "0 4 * * 1"
 
 # ...
-      - uses: merrkry/fod-hash-check@v0.1.0
-        with:
-          installables: .#web.pnpmDeps
-          use-cache: false
+- uses: merrkry/fod-hash-check@v0.1.0
+  with:
+    use-cache: false
 ```
 
 ## Inputs
 
-| Input          | Default  | Description                                                                                                      |
-| -------------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
-| `installables` | required | Nix installables, separated by whitespace or newlines.                                                           |
-| `use-cache`    | `true`   | Skip the check when a success for the same key is cached. With `false`, always check, and still cache a success. |
+| Input          | Default           | Description                                                                                                      |
+| -------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `config`       | `fod-hashes.toml` | TOML file listing the FODs to check. Read only when `installables` is not set.                                   |
+| `installables` |                   | Nix installables to check, separated by whitespace or newlines. Set either this or `config`, not both.           |
+| `use-cache`    | `true`            | Skip the check when a success for the same key is cached. With `false`, always check, and still cache a success. |
 
-Installables follow the same rules as `nix build`: `.#web.pnpmDeps` resolves to `packages.<system>.web.pnpmDeps` or `legacyPackages.<system>.web.pnpmDeps`, and full attribute paths such as `.#checks.x86_64-linux.foo` also work. Lock files are not written.
+Installables follow the same rules as `nix build`: `.#web.pnpmDeps` resolves to `packages.<system>.web.pnpmDeps` or `legacyPackages.<system>.web.pnpmDeps`, and full attribute paths such as `.#checks.x86_64-linux.foo` also work. Relative flake references like `.` resolve against the workspace, not the config file. Lock files are not written.
 
 Each installable must be a fixed-output derivation, such as `.#web.pnpmDeps` rather than `.#web`. The action fails on any other derivation, since rebuilding it verifies no hash.
+
+## Config file
+
+Each table in the config file is a target. The table name identifies the target, and these fields describe it:
+
+| Field         | Required | Description                                                                             |
+| ------------- | -------- | --------------------------------------------------------------------------------------- |
+| `installable` | yes      | Nix installable of the FOD.                                                             |
+| `file`        | no       | File that declares the FOD's hash, for tools that update hashes. The action ignores it. |
+
+The action ignores other fields as well.
 
 ## Outputs
 
